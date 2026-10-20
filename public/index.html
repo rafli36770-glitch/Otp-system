@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OTP System</title>
+<style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; background: #f5f5f5; color: #222; }
+    h1 { font-size: 1.4rem; margin-bottom: 4px; }
+    .sub { color: #666; font-size: 0.85rem; margin-bottom: 20px; }
+    .card { background: white; padding: 16px; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); margin-bottom: 14px; }
+    .card h2 { font-size: 0.95rem; margin: 0 0 10px 0; }
+    input { width: 100%; padding: 10px; margin-bottom: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+    button { padding: 9px 18px; background: #075e54; color: white; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+    button:disabled { background: #999; }
+    .msg { margin-top: 8px; font-size: 13px; min-height: 18px; }
+    .ok { color: #0a7a3e; } .err { color: #b33; } .muted { color: #777; }
+    table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+    th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid #eee; font-size: 12px; }
+    th { background: #075e54; color: white; }
+</style>
+</head>
+<body>
+    <h1>OTP System</h1>
+    <p class="sub">Kirim OTP via WhatsApp, verifikasi, pantau cooldown.</p>
+
+    <div class="card">
+        <h2>1. Kirim OTP</h2>
+        <input id="sendNum" placeholder="08xxxx atau 628xxxx">
+        <button id="sendBtn" onclick="sendOtp()">Kirim OTP</button>
+        <div id="sendMsg" class="msg"></div>
+    </div>
+    <div class="card">
+        <h2>2. Verifikasi</h2>
+        <input id="verNum" placeholder="Nomor">
+        <input id="verCode" placeholder="6 digit" maxlength="6">
+        <button id="verBtn" onclick="verifyOtp()">Verifikasi</button>
+        <div id="verMsg" class="msg"></div>
+    </div>
+    <div class="card">
+        <h2>3. Cek Status</h2>
+        <input id="stNum" placeholder="Nomor">
+        <button onclick="checkStatus()">Cek</button>
+        <div id="stMsg" class="msg"></div>
+    </div>
+
+    <h2 style="font-size:0.95rem; margin-top:20px;">Log (maks 50)</h2>
+    <button onclick="loadLogs()" style="margin-bottom:8px;">Refresh</button>
+    <table>
+        <thead><tr><th>Nomor</th><th>Terakhir</th><th>Expired</th><th>Attempt</th></tr></thead>
+        <tbody id="logBody"><tr><td colspan="4" class="muted">Belum ada data.</td></tr></tbody>
+    </table>
+
+<script>
+async function sendOtp() {
+    const btn = document.getElementById('sendBtn'), msg = document.getElementById('sendMsg');
+    const number = document.getElementById('sendNum').value.trim();
+    if (!number) { msg.className='msg err'; msg.textContent='Nomor wajib.'; return; }
+    btn.disabled = true; msg.className='msg muted'; msg.textContent='Mengirim...';
+    try {
+        const r = await fetch('/api/otp/send', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({number}) });
+        const d = await r.json();
+        if (!r.ok) { msg.className='msg err'; msg.textContent='X ' + (d.error||'Gagal'); }
+        else { msg.className='msg ok'; msg.textContent='OK. Cooldown ' + Math.round(d.cooldownMs/1000) + 's. Kirim ke-' + d.sendsThisHour + '/' + d.maxSendsPerHour; loadLogs(); }
+    } catch(e) { msg.className='msg err'; msg.textContent='X ' + e.message; }
+    btn.disabled = false;
+}
+async function verifyOtp() {
+    const btn = document.getElementById('verBtn'), msg = document.getElementById('verMsg');
+    const number = document.getElementById('verNum').value.trim();
+    const code = document.getElementById('verCode').value.trim();
+    if (!number || !code) { msg.className='msg err'; msg.textContent='Wajib diisi.'; return; }
+    btn.disabled = true; msg.className='msg muted'; msg.textContent='Memverifikasi...';
+    try {
+        const r = await fetch('/api/otp/verify', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({number, code}) });
+        const d = await r.json();
+        if (!r.ok) msg.className='msg err', msg.textContent='X ' + d.error + (d.attemptsLeft!==undefined ? ' (sisa '+d.attemptsLeft+')' : '');
+        else msg.className='msg ok', msg.textContent='OK. ' + d.message;
+    } catch(e) { msg.className='msg err'; msg.textContent='X ' + e.message; }
+    btn.disabled = false;
+}
+async function checkStatus() {
+    const msg = document.getElementById('stMsg'), number = document.getElementById('stNum').value.trim();
+    if (!number) { msg.className='msg err'; msg.textContent='Nomor wajib.'; return; }
+    try {
+        const r = await fetch('/api/otp/status?number=' + encodeURIComponent(number));
+        const d = await r.json();
+        if (!d.hasOtp && !d.cooldownRemainingMs) { msg.className='msg muted'; msg.textContent='Tidak ada OTP aktif.'; return; }
+        msg.className='msg ok';
+        msg.innerHTML = 'OTP: <b>' + (d.hasOtp?'Ya':'Tidak') + '</b><br>Cooldown: ' + Math.ceil(d.cooldownRemainingMs/1000) + 's<br>Expired: ' + Math.ceil(d.expiresInMs/1000) + 's<br>Attempt: ' + d.attemptsUsed + '/' + (d.attemptsUsed+d.attemptsLeft) + '<br>Jam ini: ' + d.sendsThisHour;
+    } catch(e) { msg.className='msg err'; msg.textContent='X ' + e.message; }
+}
+async function loadLogs() {
+    try {
+        const r = await fetch('/api/otp/logs');
+        const d = await r.json();
+        const t = document.getElementById('logBody');
+        if (!d.logs.length) { t.innerHTML = '<tr><td colspan="4" class="muted">Belum ada data.</td></tr>'; return; }
+        t.innerHTML = d.logs.map(l => '<tr><td>'+l.number+'</td><td>'+(l.lastSentAt?new Date(l.lastSentAt).toLocaleString('id-ID'):'-')+'</td><td>'+(l.expiresAt?new Date(l.expiresAt).toLocaleString('id-ID'):'-')+'</td><td>'+l.attempts+'</td></tr>').join('');
+    } catch(e) { console.error(e); }
+}
+loadLogs();
+</script>
+</body>
+</html>
